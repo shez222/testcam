@@ -157,7 +157,7 @@
     let cvReady = false;
     let currentCaptureIndex = 0;
 
-    // Define capture points
+    // Define capture points with positions on the sphere
     const capturePoints = [
       { name: 'Front', instruction: 'Capture Front', position: { x: 0, y: 0, z: 1 } },
       { name: 'Right', instruction: 'Rotate Right & Capture', position: { x: 1, y: 0, z: 0 } },
@@ -217,15 +217,60 @@
     }
 
     /**
-     * Stitch captured images into a panorama using OpenCV.js.
-     * This function assumes that the Stitcher module is available.
+     * Initialize Three.js to display a 3D sphere with capture points.
+     */
+    function initThreeJS() {
+      const scene = new THREE.Scene();
+      const cameraThree = new THREE.PerspectiveCamera(75, threejsCanvas.clientWidth / threejsCanvas.clientHeight, 0.1, 1000);
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(threejsCanvas.clientWidth, threejsCanvas.clientHeight);
+      threejsCanvas.appendChild(renderer.domElement);
+
+      // Create a transparent sphere
+      const geometry = new THREE.SphereGeometry(1, 32, 32);
+      const material = new THREE.MeshBasicMaterial({ 
+        color: 0xffffff, 
+        wireframe: true, 
+        transparent: true, 
+        opacity: 0.2 
+      });
+      const sphere = new THREE.Mesh(geometry, material);
+      scene.add(sphere);
+
+      // Add capture points as markers
+      capturePoints.forEach(point => {
+        const pointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
+        const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const marker = new THREE.Mesh(pointGeometry, pointMaterial);
+        marker.position.set(point.position.x, point.position.y, point.position.z);
+        scene.add(marker);
+      });
+
+      // Position the camera at the center of the sphere
+      cameraThree.position.set(0, 0, 0);
+
+      // Add orbit controls (optional, if you want user to rotate the sphere)
+      // Uncomment the following lines if you include OrbitControls
+      /*
+      const controls = new THREE.OrbitControls(cameraThree, renderer.domElement);
+      controls.enableZoom = false;
+      controls.enablePan = false;
+      controls.enableRotate = true;
+      */
+
+      // Rotate the sphere slowly
+      function animate() {
+        requestAnimationFrame(animate);
+        sphere.rotation.y += 0.005;
+        renderer.render(scene, cameraThree);
+      }
+      animate();
+    }
+
+    /**
+     * Stitch captured images into a panorama using the backend server.
      */
     async function stitchImages() {
-      if (!cvReady) {
-        alert("OpenCV is not ready yet. Please wait.");
-        return;
-      }
-
       if (capturedImages.length < capturePoints.length) {
         alert(`Please capture all ${capturePoints.length} frames before stitching.`);
         return;
@@ -235,32 +280,25 @@
       stitchBtn.disabled = true;
 
       try {
-        let mats = [];
-        for (let dataURL of capturedImages) {
-          let mat = await dataURLToMat(dataURL);
-          mats.push(mat);
+        const formData = new FormData();
+        capturedImages.forEach((dataURL, index) => {
+          // Convert Data URL to Blob
+          const blob = dataURLToBlob(dataURL);
+          formData.append('images', blob, `capture_${index}.jpg`);
+        });
+
+        // Adjust the server URL as needed
+        const response = await fetch('http://localhost:3000/stitch', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          throw new Error('Stitching failed on the server.');
         }
 
-        // Create Stitcher instance
-        let stitcher = new cv.Stitcher.create(cv.Stitcher_PANORAMA);
-        let pano = new cv.Mat();
-        let status = stitcher.stitch(mats, pano);
-
-        if (status !== cv.Stitcher_OK) {
-          throw new Error("Stitching failed with status: " + status);
-        }
-
-        // Convert stitched Mat to Data URL
-        let stitchedCanvas = document.createElement('canvas');
-        stitchedCanvas.width = pano.cols;
-        stitchedCanvas.height = pano.rows;
-        cv.imshow(stitchedCanvas, pano);
-        let stitchedDataURL = stitchedCanvas.toDataURL('image/jpeg');
-
-        // Clean up
-        mats.forEach(mat => mat.delete());
-        pano.delete();
-        stitcher.delete();
+        const stitchedImageBlob = await response.blob();
+        const stitchedImageURL = URL.createObjectURL(stitchedImageBlob);
 
         // Initialize Photo Sphere Viewer with stitched panorama
         if (viewer) {
@@ -269,7 +307,7 @@
 
         viewer = new PhotoSphereViewer.Viewer({
           container: viewerDiv,
-          panorama: stitchedDataURL,
+          panorama: stitchedImageURL,
           defaultYaw: 0,
           defaultPitch: 0,
           defaultFov: 70,
@@ -282,7 +320,25 @@
         console.error("Error during stitching:", error);
         alert("Error during stitching: " + error.message);
         statusDiv.textContent = "Error during stitching.";
+        stitchBtn.disabled = false; // Re-enable the button for retry
       }
+    }
+
+    /**
+     * Helper function to convert Data URL to Blob.
+     * @param {string} dataURL 
+     * @returns {Blob}
+     */
+    function dataURLToBlob(dataURL) {
+      const parts = dataURL.split(';base64,');
+      const byteString = atob(parts[1]);
+      const mimeString = parts[0].split(':')[1];
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+      }
+      return new Blob([ab], { type: mimeString });
     }
 
     /**
@@ -294,42 +350,6 @@
       } else {
         overlay.textContent = "All frames captured. Ready to stitch.";
       }
-    }
-
-    /**
-     * Initialize Three.js to display a 3D sphere with capture points.
-     */
-    function initThreeJS() {
-      const scene = new THREE.Scene();
-      const cameraThree = new THREE.PerspectiveCamera(75, threejsCanvas.clientWidth / threejsCanvas.clientHeight, 0.1, 1000);
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(threejsCanvas.clientWidth, threejsCanvas.clientHeight);
-      threejsCanvas.appendChild(renderer.domElement);
-
-      // Create a sphere
-      const geometry = new THREE.SphereGeometry(1, 32, 32);
-      const material = new THREE.MeshBasicMaterial({ color: 0x555555, wireframe: true });
-      const sphere = new THREE.Mesh(geometry, material);
-      scene.add(sphere);
-
-      // Add capture points
-      capturePoints.forEach(point => {
-        const pointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
-        const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const marker = new THREE.Mesh(pointGeometry, pointMaterial);
-        marker.position.set(point.position.x, point.position.y, point.position.z);
-        scene.add(marker);
-      });
-
-      cameraThree.position.z = 3;
-
-      // Rotate the sphere slowly
-      function animate() {
-        requestAnimationFrame(animate);
-        sphere.rotation.y += 0.005;
-        renderer.render(scene, cameraThree);
-      }
-      animate();
     }
 
     /**
