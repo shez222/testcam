@@ -1,443 +1,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Teleport: 360° Camera</title>
-  <style>
-    /* Base Styles */
-    body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      background: #f4f4f4;
-      min-height: 100vh;
-    }
-    h1 {
-      margin-top: 20px;
-      color: #333;
-    }
-    #cameraContainer {
-      position: relative;
-      width: 100%;
-      max-width: 600px;
-      margin: 20px 0;
-    }
-    video, canvas {
-      width: 100%;
-      border-radius: 8px;
-    }
-    #overlay {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      color: white;
-      font-size: 24px;
-      background: rgba(0, 0, 0, 0.3);
-      border-radius: 8px;
-    }
-    #controls {
-      margin: 10px 0;
-      display: flex;
-      gap: 10px;
-    }
-    #viewer {
-      width: 100%;
-      max-width: 800px;
-      height: 500px;
-      background: #000;
-      margin-top: 20px;
-      border-radius: 8px;
-    }
-    button {
-      padding: 10px 15px;
-      border: none;
-      background-color: #007BFF;
-      color: white;
-      cursor: pointer;
-      border-radius: 5px;
-      font-size: 16px;
-    }
-    button:disabled {
-      background-color: #ccc;
-      cursor: not-allowed;
-    }
-    #status {
-      margin-top: 10px;
-      font-weight: bold;
-      color: #555;
-    }
-    /* Three.js Canvas */
-    #threejsCanvas {
-      width: 100%;
-      max-width: 600px;
-      height: 300px;
-      margin: 20px 0;
-      border-radius: 8px;
-      background: #000;
-    }
-    /* Responsive Design */
-    @media (max-width: 600px) {
-      #viewer {
-        height: 300px;
-      }
-      button {
-        font-size: 14px;
-        padding: 8px 12px;
-      }
-      #overlay {
-        font-size: 18px;
-      }
-      #threejsCanvas {
-        height: 200px;
-      }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>360 Sphere View</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
 </head>
 <body>
-  <h1>Teleport: 360° Camera</h1>
-  
-  <!-- Three.js Canvas for 3D Guidance -->
-  <div id="threejsCanvas"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r146/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Scene, Camera, and Renderer
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-  <!-- Camera Container -->
-  <div id="cameraContainer">
-    <video id="camera" autoplay playsinline></video>
-    <div id="overlay">Capture Front</div>
-  </div>
-  <canvas id="captureCanvas" style="display: none;"></canvas>
-  
-  <!-- Control Buttons -->
-  <div id="controls">
-    <button id="captureBtn">Capture Frame</button>
-    <button id="stitchBtn" disabled>Stitch Images</button>
-    <button id="resetBtn">Reset</button>
-  </div>
-  
-  <!-- Status Display -->
-  <div id="status">Initializing...</div>
-  
-  <!-- Panorama Viewer -->
-  <div id="viewer"></div>
-  
-  <!-- Include Three.js -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r136/three.min.js"></script>
-  
-  <!-- Include Photo Sphere Viewer v4.2.0 CSS and JS -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photo-sphere-viewer@4.2.0/dist/photo-sphere-viewer.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/photo-sphere-viewer@4.2.0/dist/photo-sphere-viewer.min.js"></script>
-  
-  <!-- Include OpenCV.js -->
-  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
-  
-  <script>
-    // DOM Elements
-    const camera = document.getElementById('camera');
-    const captureCanvas = document.getElementById('captureCanvas');
-    const captureCtx = captureCanvas.getContext('2d');
-    const captureBtn = document.getElementById('captureBtn');
-    const stitchBtn = document.getElementById('stitchBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const viewerDiv = document.getElementById('viewer');
-    const statusDiv = document.getElementById('status');
-    const overlay = document.getElementById('overlay');
-    const threejsCanvas = document.getElementById('threejsCanvas');
-
-    // Variables
-    let capturedImages = [];
-    let viewer;
-    let cvReady = false;
-    let currentCaptureIndex = 0;
-
-    // Define capture points with positions on the sphere
-    const capturePoints = [
-      { name: 'Front', instruction: 'Capture Front', position: { x: 0, y: 0, z: 1 } },
-      { name: 'Right', instruction: 'Rotate Right & Capture', position: { x: 1, y: 0, z: 0 } },
-      { name: 'Back', instruction: 'Rotate Back & Capture', position: { x: 0, y: 0, z: -1 } },
-      { name: 'Left', instruction: 'Rotate Left & Capture', position: { x: -1, y: 0, z: 0 } },
-      { name: 'Top', instruction: 'Capture Top', position: { x: 0, y: 1, z: 0 } },
-      { name: 'Bottom', instruction: 'Capture Bottom', position: { x: 0, y: -1, z: 0 } }
-    ];
-
-    /**
-     * Initialize and start the back camera.
-     */
-    async function startCamera() {
-      try {
-        const constraints = {
-          video: { 
-            facingMode: { exact: "environment" }, // Ensures back camera is used
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: false
-        };
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        camera.srcObject = stream;
-        statusDiv.textContent = "Camera initialized. Ready to capture frames.";
-      } catch (error) {
-        console.error("Error accessing camera:", error);
-        alert("Error accessing back camera. Please ensure your device has a back camera and permissions are granted.");
-        statusDiv.textContent = "Error accessing camera.";
-      }
-    }
-
-    /**
-     * Convert a Data URL to an OpenCV Mat object.
-     * @param {string} dataURL - The image Data URL.
-     * @returns {Promise<Mat>} - A promise that resolves to an OpenCV Mat.
-     */
-    function dataURLToMat(dataURL) {
-      return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = function() {
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = img.width;
-          tempCanvas.height = img.height;
-          const tempCtx = tempCanvas.getContext('2d');
-          tempCtx.drawImage(img, 0, 0);
-          const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
-          let mat = cv.matFromImageData(imgData);
-          resolve(mat);
-        };
-        img.onerror = function(err) {
-          reject(err);
-        };
-        img.src = dataURL;
-      });
-    }
-
-    /**
-     * Initialize Three.js to display a 3D sphere with capture points.
-     */
-    function initThreeJS() {
-      const scene = new THREE.Scene();
-      const cameraThree = new THREE.PerspectiveCamera(75, threejsCanvas.clientWidth / threejsCanvas.clientHeight, 0.1, 1000);
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setSize(threejsCanvas.clientWidth, threejsCanvas.clientHeight);
-      threejsCanvas.appendChild(renderer.domElement);
-
-      // Create a transparent sphere
-      const geometry = new THREE.SphereGeometry(1, 32, 32);
-      const material = new THREE.MeshBasicMaterial({ 
-        color: 0xffffff, 
-        wireframe: true, 
-        transparent: true, 
-        opacity: 0.2 
-      });
-      const sphere = new THREE.Mesh(geometry, material);
-      scene.add(sphere);
-
-      // Add capture points as markers
-      capturePoints.forEach(point => {
-        const pointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
-        const pointMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const marker = new THREE.Mesh(pointGeometry, pointMaterial);
-        marker.position.set(point.position.x, point.position.y, point.position.z);
-        scene.add(marker);
-      });
-
-      // Position the camera at the center of the sphere
-      cameraThree.position.set(0, 0, 0);
-
-      // Add orbit controls (optional, if you want user to rotate the sphere)
-      // Uncomment the following lines if you include OrbitControls
-      /*
-      const controls = new THREE.OrbitControls(cameraThree, renderer.domElement);
-      controls.enableZoom = false;
-      controls.enablePan = false;
-      controls.enableRotate = true;
-      */
-
-      // Rotate the sphere slowly
-      function animate() {
-        requestAnimationFrame(animate);
-        sphere.rotation.y += 0.005;
-        renderer.render(scene, cameraThree);
-      }
-      animate();
-    }
-
-    /**
-     * Stitch captured images into a panorama using the backend server.
-     */
-    async function stitchImages() {
-      if (capturedImages.length < capturePoints.length) {
-        alert(`Please capture all ${capturePoints.length} frames before stitching.`);
-        return;
-      }
-
-      statusDiv.textContent = "Stitching images. Please wait...";
-      stitchBtn.disabled = true;
-
-      try {
-        const formData = new FormData();
-        capturedImages.forEach((dataURL, index) => {
-          // Convert Data URL to Blob
-          const blob = dataURLToBlob(dataURL);
-          formData.append('images', blob, `capture_${index}.jpg`);
+        // Create a sphere geometry
+        const geometry = new THREE.SphereGeometry(50, 64, 64);
+        const texture = new THREE.TextureLoader().load('https://cdn.jsdelivr.net/gh/akshat46/Fake-Data/sphere-pano.jpg');
+        const material = new THREE.MeshBasicMaterial({
+            map: texture,
+            side: THREE.BackSide, // Render the inside of the sphere
         });
+        const sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
 
-        // Adjust the server URL as needed
-        const response = await fetch('http://localhost:3000/stitch', {
-          method: 'POST',
-          body: formData
-        });
+        // Camera positioning
+        camera.position.set(0, 0, 0); // Inside the sphere
 
-        if (!response.ok) {
-          throw new Error('Stitching failed on the server.');
+        // OrbitControls for 360 navigation
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true; // Smooth motion
+        controls.dampingFactor = 0.05;
+        controls.enableZoom = false; // Disable zoom (optional)
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
         }
 
-        const stitchedImageBlob = await response.blob();
-        const stitchedImageURL = URL.createObjectURL(stitchedImageBlob);
+        animate();
 
-        // Initialize Photo Sphere Viewer with stitched panorama
-        if (viewer) {
-          viewer.destroy();
-        }
-
-        viewer = new PhotoSphereViewer.Viewer({
-          container: viewerDiv,
-          panorama: stitchedImageURL,
-          defaultYaw: 0,
-          defaultPitch: 0,
-          defaultFov: 70,
-          navbar: true,
-          loadingImg: 'https://photo-sphere-viewer.js.org/assets/photosphere-logo.gif'
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
         });
-
-        statusDiv.textContent = "Stitching completed! Explore your 360° panorama.";
-      } catch (error) {
-        console.error("Error during stitching:", error);
-        alert("Error during stitching: " + error.message);
-        statusDiv.textContent = "Error during stitching.";
-        stitchBtn.disabled = false; // Re-enable the button for retry
-      }
-    }
-
-    /**
-     * Helper function to convert Data URL to Blob.
-     * @param {string} dataURL 
-     * @returns {Blob}
-     */
-    function dataURLToBlob(dataURL) {
-      const parts = dataURL.split(';base64,');
-      const byteString = atob(parts[1]);
-      const mimeString = parts[0].split(':')[1];
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      return new Blob([ab], { type: mimeString });
-    }
-
-    /**
-     * Update the overlay with the current instruction.
-     */
-    function updateOverlay() {
-      if (currentCaptureIndex < capturePoints.length) {
-        overlay.textContent = capturePoints[currentCaptureIndex].instruction;
-      } else {
-        overlay.textContent = "All frames captured. Ready to stitch.";
-      }
-    }
-
-    /**
-     * Capture a frame from the video stream.
-     */
-    captureBtn.addEventListener('click', () => {
-      if (camera.readyState !== camera.HAVE_ENOUGH_DATA) {
-        alert("Camera not ready. Please wait.");
-        return;
-      }
-
-      if (currentCaptureIndex >= capturePoints.length) {
-        alert("All frames have been captured. Proceed to stitching.");
-        return;
-      }
-
-      const width = camera.videoWidth;
-      const height = camera.videoHeight;
-      captureCanvas.width = width;
-      captureCanvas.height = height;
-      captureCtx.drawImage(camera, 0, 0, width, height);
-      
-      const imageData = captureCanvas.toDataURL('image/jpeg');
-      capturedImages.push(imageData);
-
-      alert(`Frame captured for ${capturePoints[currentCaptureIndex].name}!`);
-      currentCaptureIndex++;
-      updateOverlay();
-      statusDiv.textContent = `Captured ${capturedImages.length} of ${capturePoints.length} frames.`;
-
-      // Enable Stitch button if all frames are captured
-      if (capturedImages.length === capturePoints.length) {
-        stitchBtn.disabled = false;
-      }
-    });
-
-    /**
-     * Initiate the stitching process when the Stitch Images button is clicked.
-     */
-    stitchBtn.addEventListener('click', () => {
-      stitchImages();
-    });
-
-    /**
-     * Reset the application to its initial state.
-     */
-    resetBtn.addEventListener('click', () => {
-      capturedImages = [];
-      stitchBtn.disabled = true;
-      currentCaptureIndex = 0;
-      if (viewer) {
-        viewer.destroy();
-        viewer = null;
-      }
-      updateOverlay();
-      statusDiv.textContent = "App reset! Start capturing frames again.";
-      alert("App reset! Start capturing frames again.");
-    });
-
-    /**
-     * Callback function once OpenCV.js is loaded.
-     */
-    function onOpenCvReady() {
-      cv['onRuntimeInitialized'] = () => {
-        cvReady = true;
-        statusDiv.textContent = "OpenCV.js is ready. Initializing camera...";
-        startCamera();
-        updateOverlay();
-      };
-    }
-
-    /**
-     * Initialize Three.js after the DOM is fully loaded.
-     */
-    window.addEventListener('DOMContentLoaded', () => {
-      initThreeJS();
-    });
-
-    /**
-     * Initialize the application.
-     * Ensures OpenCV.js is loaded before starting the camera.
-     */
-    // If OpenCV.js is already loaded before the script runs
-    if (typeof cv !== 'undefined' && cv.Mat) {
-      cvReady = true;
-      startCamera();
-      updateOverlay();
-    }
-  </script>
+    </script>
 </body>
 </html>
