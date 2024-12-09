@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>360° Camera App</title>
+  <title>Teleport: 360° Camera</title>
   <style>
-    /* Your existing styles */
+    /* Base Styles */
     body {
       font-family: Arial, sans-serif;
       margin: 0;
@@ -13,10 +13,16 @@
       flex-direction: column;
       align-items: center;
       background: #f4f4f4;
+      min-height: 100vh;
+    }
+    h1 {
+      margin-top: 20px;
+      color: #333;
     }
     video, canvas {
       max-width: 100%;
       margin: 10px 0;
+      border-radius: 8px;
     }
     #controls {
       margin: 10px 0;
@@ -28,6 +34,7 @@
       height: 500px;
       background: #000;
       margin-top: 20px;
+      border-radius: 8px;
     }
     button {
       padding: 10px 15px;
@@ -36,15 +43,31 @@
       color: white;
       cursor: pointer;
       border-radius: 5px;
+      font-size: 16px;
     }
     button:disabled {
       background-color: #ccc;
       cursor: not-allowed;
     }
+    #status {
+      margin-top: 10px;
+      font-weight: bold;
+      color: #555;
+    }
+    /* Responsive Design */
+    @media (max-width: 600px) {
+      #viewer {
+        height: 300px;
+      }
+      button {
+        font-size: 14px;
+        padding: 8px 12px;
+      }
+    }
   </style>
 </head>
 <body>
-  <h1>360° Camera App</h1>
+  <h1>Teleport: 360° Camera</h1>
   <video id="camera" autoplay playsinline></video>
   <canvas id="captureCanvas" style="display: none;"></canvas>
   
@@ -54,14 +77,19 @@
     <button id="resetBtn">Reset</button>
   </div>
   
-  <div id="viewer"></div>
+  <div id="status">Initializing...</div>
   
+  <div id="viewer"></div>
   
   <!-- Include Photo Sphere Viewer v4.2.0 CSS and JS -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/photo-sphere-viewer@4.2.0/dist/photo-sphere-viewer.min.css">
   <script src="https://cdn.jsdelivr.net/npm/photo-sphere-viewer@4.2.0/dist/photo-sphere-viewer.min.js"></script>
-
+  
+  <!-- Include OpenCV.js -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+  
   <script>
+    // DOM Elements
     const camera = document.getElementById('camera');
     const captureCanvas = document.getElementById('captureCanvas');
     const captureCtx = captureCanvas.getContext('2d');
@@ -69,28 +97,138 @@
     const stitchBtn = document.getElementById('stitchBtn');
     const resetBtn = document.getElementById('resetBtn');
     const viewerDiv = document.getElementById('viewer');
+    const statusDiv = document.getElementById('status');
+
+    // Variables
     let capturedImages = [];
     let viewer;
+    let cvReady = false;
 
-    // Access the camera
+    /**
+     * Initialize and start the back camera.
+     */
     async function startCamera() {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const constraints = {
           video: { 
-            facingMode: "user",
+            facingMode: { exact: "environment" }, // Ensures back camera is used
             width: { ideal: 1280 },
             height: { ideal: 720 }
-          } 
-        });
+          },
+          audio: false
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
         camera.srcObject = stream;
+        statusDiv.textContent = "Camera initialized. Ready to capture frames.";
       } catch (error) {
         console.error("Error accessing camera:", error);
-        alert("Error accessing camera: " + error.message);
+        alert("Error accessing back camera. Please ensure your device has a back camera and permissions are granted.");
+        statusDiv.textContent = "Error accessing camera.";
       }
     }
 
-    // Capture an image from the camera
+    /**
+     * Convert a Data URL to an OpenCV Mat object.
+     * @param {string} dataURL - The image Data URL.
+     * @returns {Promise<Mat>} - A promise that resolves to an OpenCV Mat.
+     */
+    function dataURLToMat(dataURL) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = function() {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = img.width;
+          tempCanvas.height = img.height;
+          const tempCtx = tempCanvas.getContext('2d');
+          tempCtx.drawImage(img, 0, 0);
+          const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
+          let mat = cv.matFromImageData(imgData);
+          resolve(mat);
+        };
+        img.onerror = function(err) {
+          reject(err);
+        };
+        img.src = dataURL;
+      });
+    }
+
+    /**
+     * Stitch captured images into a panorama using OpenCV.js.
+     */
+    async function stitchImages() {
+      if (!cvReady) {
+        alert("OpenCV is not ready yet. Please wait.");
+        return;
+      }
+
+      if (capturedImages.length < 2) {
+        alert("Please capture at least two frames for stitching.");
+        return;
+      }
+
+      statusDiv.textContent = "Stitching images. Please wait...";
+
+      try {
+        let mats = [];
+        for (let dataURL of capturedImages) {
+          let mat = await dataURLToMat(dataURL);
+          mats.push(mat);
+        }
+
+        // Create Stitcher instance
+        let stitcher = new cv.Stitcher.create(cv.Stitcher_PANORAMA);
+        let pano = new cv.Mat();
+        let status = stitcher.stitch(mats, pano);
+
+        if (status !== cv.Stitcher_OK) {
+          throw new Error("Stitching failed with status: " + status);
+        }
+
+        // Convert stitched Mat to Data URL
+        let stitchedCanvas = document.createElement('canvas');
+        stitchedCanvas.width = pano.cols;
+        stitchedCanvas.height = pano.rows;
+        cv.imshow(stitchedCanvas, pano);
+        let stitchedDataURL = stitchedCanvas.toDataURL('image/jpeg');
+
+        // Clean up
+        mats.forEach(mat => mat.delete());
+        pano.delete();
+        stitcher.delete();
+
+        // Initialize Photo Sphere Viewer with stitched panorama
+        if (viewer) {
+          viewer.destroy();
+        }
+
+        viewer = new PhotoSphereViewer.Viewer({
+          container: viewerDiv,
+          panorama: stitchedDataURL,
+          defaultYaw: 0,
+          defaultPitch: 0,
+          defaultFov: 70,
+          navbar: true,
+          loadingImg: 'https://photo-sphere-viewer.js.org/assets/photosphere-logo.gif'
+        });
+
+        statusDiv.textContent = "Stitching completed! Explore your 360° panorama.";
+      } catch (error) {
+        console.error("Error during stitching:", error);
+        alert("Error during stitching: " + error.message);
+        statusDiv.textContent = "Error during stitching.";
+      }
+    }
+
+    /**
+     * Capture a frame from the video stream.
+     */
     captureBtn.addEventListener('click', () => {
+      if (camera.readyState !== camera.HAVE_ENOUGH_DATA) {
+        alert("Camera not ready. Please wait.");
+        return;
+      }
+
       const width = camera.videoWidth;
       const height = camera.videoHeight;
       captureCanvas.width = width;
@@ -101,38 +239,20 @@
       capturedImages.push(imageData);
 
       alert(`Frame captured! Total frames: ${capturedImages.length}`);
-      stitchBtn.disabled = false;
+      stitchBtn.disabled = capturedImages.length < 2;
+      statusDiv.textContent = `Captured ${capturedImages.length} frame(s).`;
     });
 
-    // Stitch images (demo with one image)
+    /**
+     * Initiate the stitching process when the Stitch Images button is clicked.
+     */
     stitchBtn.addEventListener('click', () => {
-      if (capturedImages.length > 0) {
-        alert("Stitching frames into a panorama (demo with one image)");
-        
-        // Placeholder: Using the first captured image as a panorama
-        const panorama = capturedImages[0];
-        
-        if (viewer) {
-          viewer.destroy();
-        }
-
-        try {
-          viewer = new PhotoSphereViewer.Viewer({
-            container: viewerDiv,
-            panorama: panorama,
-            // Optional: Add default or custom options
-            defaultYaw: 0,
-            defaultPitch: 0,
-            defaultFov: 70,
-          });
-        } catch (error) {
-          console.error('Error initializing Photo Sphere Viewer:', error);
-          alert('Failed to initialize the panorama viewer. Check the console for details.');
-        }
-      }
+      stitchImages();
     });
 
-    // Reset the app
+    /**
+     * Reset the application to its initial state.
+     */
     resetBtn.addEventListener('click', () => {
       capturedImages = [];
       stitchBtn.disabled = true;
@@ -140,11 +260,30 @@
         viewer.destroy();
         viewer = null;
       }
+      statusDiv.textContent = "App reset! Start capturing frames again.";
       alert("App reset! Start capturing frames again.");
     });
 
-    // Initialize the app
-    startCamera();
+    /**
+     * Callback function once OpenCV.js is loaded.
+     */
+    function onOpenCvReady() {
+      cv['onRuntimeInitialized'] = () => {
+        cvReady = true;
+        statusDiv.textContent = "OpenCV.js is ready. Initializing camera...";
+        startCamera();
+      };
+    }
+
+    /**
+     * Initialize the application.
+     * Ensures OpenCV.js is loaded before starting the camera.
+     */
+    // If OpenCV.js is already loaded before the script runs
+    if (typeof cv !== 'undefined' && cv.Mat) {
+      cvReady = true;
+      startCamera();
+    }
   </script>
 </body>
 </html>
