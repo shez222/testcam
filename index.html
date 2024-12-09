@@ -19,18 +19,51 @@
       margin-top: 20px;
       color: #333;
     }
-    video, canvas {
-      max-width: 100%;
-      margin: 10px 0;
-      border-radius: 8px;
+    #cameraContainer {
+      position: relative;
+      width: 100%;
+      max-width: 600px;
+      aspect-ratio: 16 / 9;
+      margin: 20px 0;
     }
+    video, canvas {
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      object-fit: cover;
+    }
+    /* Overlay Styles */
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .marker {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background-color: rgba(255, 0, 0, 0.7);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .marker.captured {
+      background-color: rgba(0, 255, 0, 0.7);
+    }
+    /* Controls */
     #controls {
       margin: 10px 0;
       display: flex;
       gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
     }
     #viewer {
       width: 100%;
+      max-width: 800px;
       height: 500px;
       background: #000;
       margin-top: 20px;
@@ -44,6 +77,7 @@
       cursor: pointer;
       border-radius: 5px;
       font-size: 16px;
+      min-width: 120px;
     }
     button:disabled {
       background-color: #ccc;
@@ -53,6 +87,8 @@
       margin-top: 10px;
       font-weight: bold;
       color: #555;
+      text-align: center;
+      max-width: 600px;
     }
     /* Responsive Design */
     @media (max-width: 600px) {
@@ -62,14 +98,19 @@
       button {
         font-size: 14px;
         padding: 8px 12px;
+        min-width: 100px;
       }
     }
   </style>
 </head>
 <body>
   <h1>Teleport: 360° Camera</h1>
-  <video id="camera" autoplay playsinline></video>
-  <canvas id="captureCanvas" style="display: none;"></canvas>
+  
+  <div id="cameraContainer">
+    <video id="camera" autoplay playsinline></video>
+    <canvas id="captureCanvas" style="display: none;"></canvas>
+    <div id="overlay"></div>
+  </div>
   
   <div id="controls">
     <button id="captureBtn">Capture Frame</button>
@@ -98,11 +139,17 @@
     const resetBtn = document.getElementById('resetBtn');
     const viewerDiv = document.getElementById('viewer');
     const statusDiv = document.getElementById('status');
+    const overlay = document.getElementById('overlay');
 
     // Variables
     let capturedImages = [];
     let viewer;
     let cvReady = false;
+
+    // Define capture points (e.g., 8 points around 360 degrees)
+    const totalPoints = 8;
+    let currentPoint = 0;
+    const markers = [];
 
     /**
      * Initialize and start the back camera.
@@ -119,12 +166,56 @@
         };
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         camera.srcObject = stream;
-        statusDiv.textContent = "Camera initialized. Ready to capture frames.";
+        statusDiv.textContent = `Camera initialized. Capture frame ${currentPoint + 1} of ${totalPoints}.`;
+        highlightCurrentMarker();
       } catch (error) {
         console.error("Error accessing camera:", error);
         alert("Error accessing back camera. Please ensure your device has a back camera and permissions are granted.");
         statusDiv.textContent = "Error accessing camera.";
       }
+    }
+
+    /**
+     * Create overlay markers.
+     */
+    function createMarkers() {
+      for (let i = 0; i < totalPoints; i++) {
+        const marker = document.createElement('div');
+        marker.classList.add('marker');
+        const angle = (360 / totalPoints) * i;
+        const position = calculateMarkerPosition(angle);
+        marker.style.left = `${position.x}%`;
+        marker.style.top = `${position.y}%`;
+        overlay.appendChild(marker);
+        markers.push(marker);
+      }
+    }
+
+    /**
+     * Calculate marker position based on angle.
+     * 0 degrees is at the top (12 o'clock), increasing clockwise.
+     * @param {number} angle - Angle in degrees.
+     * @returns {Object} - {x: percentage, y: percentage}
+     */
+    function calculateMarkerPosition(angle) {
+      const radius = 40; // percentage
+      const radians = (angle - 90) * (Math.PI / 180); // Adjust so 0 is at top
+      const x = 50 + radius * Math.cos(radians);
+      const y = 50 + radius * Math.sin(radians);
+      return { x, y };
+    }
+
+    /**
+     * Highlight the current marker to capture.
+     */
+    function highlightCurrentMarker() {
+      markers.forEach((marker, index) => {
+        if (index === currentPoint) {
+          marker.style.border = '2px solid yellow';
+        } else {
+          marker.style.border = '2px solid #fff';
+        }
+      });
     }
 
     /**
@@ -238,9 +329,19 @@
       const imageData = captureCanvas.toDataURL('image/jpeg');
       capturedImages.push(imageData);
 
-      alert(`Frame captured! Total frames: ${capturedImages.length}`);
-      stitchBtn.disabled = capturedImages.length < 2;
-      statusDiv.textContent = `Captured ${capturedImages.length} frame(s).`;
+      // Mark the current point as captured
+      markers[currentPoint].classList.add('captured');
+      markers[currentPoint].style.border = '2px solid green';
+      currentPoint++;
+      
+      if (currentPoint < totalPoints) {
+        statusDiv.textContent = `Captured frame ${currentPoint} of ${totalPoints}. Rotate to the next position and capture.`;
+        highlightCurrentMarker();
+      } else {
+        statusDiv.textContent = `All ${totalPoints} frames captured. You can now stitch the images.`;
+        captureBtn.disabled = true;
+        stitchBtn.disabled = false;
+      }
     });
 
     /**
@@ -255,11 +356,18 @@
      */
     resetBtn.addEventListener('click', () => {
       capturedImages = [];
+      currentPoint = 0;
       stitchBtn.disabled = true;
+      captureBtn.disabled = false;
       if (viewer) {
         viewer.destroy();
         viewer = null;
       }
+      // Reset markers
+      markers.forEach(marker => {
+        marker.classList.remove('captured');
+        marker.style.border = '2px solid #fff';
+      });
       statusDiv.textContent = "App reset! Start capturing frames again.";
       alert("App reset! Start capturing frames again.");
     });
@@ -271,6 +379,7 @@
       cv['onRuntimeInitialized'] = () => {
         cvReady = true;
         statusDiv.textContent = "OpenCV.js is ready. Initializing camera...";
+        createMarkers();
         startCamera();
       };
     }
@@ -282,6 +391,7 @@
     // If OpenCV.js is already loaded before the script runs
     if (typeof cv !== 'undefined' && cv.Mat) {
       cvReady = true;
+      createMarkers();
       startCamera();
     }
   </script>
